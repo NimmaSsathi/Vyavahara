@@ -21,6 +21,8 @@ abstract final class AppTheme {
 
     return ThemeData(
       useMaterial3: true,
+      fontFamily: 'NotoSans',
+      fontFamilyFallback: const ['NotoSansKannada', 'NotoSansDevanagari'],
       colorScheme: scheme,
       scaffoldBackgroundColor: AppColors.background,
       materialTapTargetSize: MaterialTapTargetSize.padded,
