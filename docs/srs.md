@@ -176,24 +176,26 @@ The sync engine is the only component that talks to the cloud; UI, controllers a
 
 **Repository layout**
 
-vyavahara/\
-app/ Flutter app (Android + web)\
-lib/\
-core/{db,sync,auth,l10n,theme,money,logging}/\
-features/{onboarding,customers,khata,suppliers,stock,billing,daily,reminders,settings}/\
-{ui,application,domain,data}/\
-voice/{stt,normalise,numbers,grammar,resolve,reply}/\
-main.dart, router.dart\
-l10n/app_kn.arb, app_hi.arb, app_en.arb\
-test/ integration_test/\
-supabase/\
-migrations/ 0001_init.sql, 0002_rls.sql, ...\
-functions/ sync-push/, sync-pull/, nightly-jobs/\
-seed.sql config.toml\
-docs/\
-srs.md (this document), adr/, voice-grammar.md, data-model.md\
-.github/workflows/ci.yml ISSUE_TEMPLATE/ PULL_REQUEST_TEMPLATE.md\
+```
+vyavahara/
+app/ Flutter app (Android + web)
+lib/
+core/{db,sync,auth,l10n,theme,money,logging}/
+features/{onboarding,customers,khata,suppliers,stock,billing,daily,reminders,settings}/
+{ui,application,domain,data}/
+voice/{stt,normalise,numbers,grammar,resolve,reply}/
+main.dart, router.dart
+l10n/app_kn.arb, app_hi.arb, app_en.arb
+test/ integration_test/
+supabase/
+migrations/ 0001_init.sql, 0002_rls.sql, ...
+functions/ sync-push/, sync-pull/, nightly-jobs/
+seed.sql config.toml
+docs/
+srs.md (this document), adr/, voice-grammar.md, data-model.md
+.github/workflows/ci.yml ISSUE_TEMPLATE/ PULL_REQUEST_TEMPLATE.md
 README.md CONTRIBUTING.md .env.example
+```
 
 **Environments:** dev (Supabase project vyavahara-dev, debug builds) and prod (vyavahara-prod, signed release). Keys live in .env locally and GitHub Actions secrets in CI; .env MUST NOT be committed.
 
@@ -253,346 +255,350 @@ Device-only tables (drift, not in Postgres): outbox (pending changes) and sync_s
 
 **Full Postgres DDL — supabase/migrations/0001_init.sql**
 
-CREATE EXTENSION IF NOT EXISTS pgcrypto;\
-CREATE EXTENSION IF NOT EXISTS pg_trgm;\
-\
-CREATE SEQUENCE sync_seq;\
-\
-CREATE OR REPLACE FUNCTION set_sync_fields() RETURNS trigger AS \$\$\
-BEGIN\
-NEW.server_seq := nextval('sync_seq');\
-IF TG_OP = 'UPDATE' THEN NEW.updated_at := GREATEST(NEW.updated_at, OLD.updated_at); END IF;\
-RETURN NEW;\
-END \$\$ LANGUAGE plpgsql;\
-\
--- Enums\
-CREATE TYPE member_role AS ENUM ('owner','helper');\
-CREATE TYPE lang_code AS ENUM ('kn','hi','en');\
-CREATE TYPE ledger_type AS ENUM ('credit','payment','adjustment');\
-CREATE TYPE supplier_type AS ENUM ('purchase','payment','adjustment');\
-CREATE TYPE pay_mode AS ENUM ('cash','upi','other');\
-CREATE TYPE unit_code AS ENUM ('kg','g','l','ml','pcs','pkt','dozen','box');\
-CREATE TYPE move_type AS ENUM ('opening','purchase','sale','return_in','damage','adjustment');\
-CREATE TYPE entry_source AS ENUM ('manual','voice','import');\
-CREATE TYPE channel_code AS ENUM ('sms','whatsapp');\
-\
-CREATE TABLE shops (\
-id UUID PRIMARY KEY,\
-name TEXT NOT NULL CHECK (length(name) BETWEEN 2 AND 120),\
-owner_name TEXT NOT NULL,\
-phone TEXT,\
-village TEXT, taluk TEXT, district TEXT, state TEXT,\
-upi_vpa TEXT,\
-default_lang lang_code NOT NULL DEFAULT 'kn',\
-timezone TEXT NOT NULL DEFAULT 'Asia/Kolkata',\
-helper_pin_limit_paise BIGINT NOT NULL DEFAULT 50000, -- Rs 500\
-plan TEXT NOT NULL DEFAULT 'free_intro',\
-trial_ends_at DATE,\
-gst_enabled BOOLEAN NOT NULL DEFAULT FALSE,\
-created_at TIMESTAMPTZ NOT NULL DEFAULT now(),\
-updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),\
-deleted_at TIMESTAMPTZ,\
-created_by UUID, device_id TEXT,\
-server_seq BIGINT\
-);\
-\
-CREATE TABLE shop_members (\
-id UUID PRIMARY KEY,\
-shop_id UUID NOT NULL REFERENCES shops(id),\
-user_id UUID REFERENCES auth.users(id), -- NULL until helper accepts invite\
-invite_email TEXT,\
-role member_role NOT NULL,\
-display_name TEXT NOT NULL,\
-pin_hash TEXT, -- argon2id; verified on device\
-is_active BOOLEAN NOT NULL DEFAULT TRUE,\
-created_at TIMESTAMPTZ NOT NULL DEFAULT now(),\
-updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),\
-deleted_at TIMESTAMPTZ,\
-created_by UUID, device_id TEXT, server_seq BIGINT,\
-UNIQUE (shop_id, user_id)\
-);\
-\
-CREATE TABLE customers (\
-id UUID PRIMARY KEY,\
-shop_id UUID NOT NULL REFERENCES shops(id),\
-full_name TEXT NOT NULL CHECK (length(full_name) BETWEEN 1 AND 100),\
-name_latin TEXT NOT NULL,\
-nickname TEXT,\
-phonetic_key TEXT,\
-phone TEXT CHECK (phone IS NULL OR phone ~ '^\[6-9\]\[0-9\]{9}\$'),\
-village TEXT,\
-photo_path TEXT,\
-lang lang_code NOT NULL DEFAULT 'kn',\
-credit_limit_paise BIGINT CHECK (credit_limit_paise IS NULL OR credit_limit_paise \>= 0),\
-opening_balance_paise BIGINT NOT NULL DEFAULT 0,\
-reminder_opt_in BOOLEAN NOT NULL DEFAULT FALSE,\
-notes TEXT,\
-created_at TIMESTAMPTZ NOT NULL DEFAULT now(),\
-updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),\
-deleted_at TIMESTAMPTZ,\
-created_by UUID, device_id TEXT, server_seq BIGINT\
-);\
-CREATE INDEX ix_customers_shop ON customers(shop_id) WHERE deleted_at IS NULL;\
-CREATE INDEX ix_customers_trgm ON customers USING gin (name_latin gin_trgm_ops);\
-\
-CREATE TABLE suppliers (\
-id UUID PRIMARY KEY,\
-shop_id UUID NOT NULL REFERENCES shops(id),\
-name TEXT NOT NULL, name_latin TEXT NOT NULL,\
-phone TEXT, town TEXT,\
-opening_due_paise BIGINT NOT NULL DEFAULT 0,\
-created_at TIMESTAMPTZ NOT NULL DEFAULT now(),\
-updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),\
-deleted_at TIMESTAMPTZ,\
-created_by UUID, device_id TEXT, server_seq BIGINT\
-);\
-\
-CREATE TABLE products (\
-id UUID PRIMARY KEY,\
-shop_id UUID NOT NULL REFERENCES shops(id),\
-name_local TEXT NOT NULL,\
-name_latin TEXT NOT NULL,\
-aliases TEXT\[\] NOT NULL DEFAULT '{}', -- e.g. {akki,chawal,rice}\
-category TEXT,\
-unit unit_code NOT NULL,\
-sell_price_paise BIGINT NOT NULL CHECK (sell_price_paise \>= 0),\
-cost_price_paise BIGINT CHECK (cost_price_paise IS NULL OR cost_price_paise \>= 0),\
-reorder_level NUMERIC(12,3) NOT NULL DEFAULT 0,\
-barcode TEXT,\
-created_at TIMESTAMPTZ NOT NULL DEFAULT now(),\
-updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),\
-deleted_at TIMESTAMPTZ,\
-created_by UUID, device_id TEXT, server_seq BIGINT\
-);\
-\
-CREATE TABLE sales (\
-id UUID PRIMARY KEY,\
-shop_id UUID NOT NULL REFERENCES shops(id),\
-customer_id UUID REFERENCES customers(id),\
-sale_time TIMESTAMPTZ NOT NULL,\
-total_paise BIGINT NOT NULL CHECK (total_paise \>= 0),\
-cash_paise BIGINT NOT NULL DEFAULT 0 CHECK (cash_paise \>= 0),\
-upi_paise BIGINT NOT NULL DEFAULT 0 CHECK (upi_paise \>= 0),\
-credit_paise BIGINT NOT NULL DEFAULT 0 CHECK (credit_paise \>= 0),\
-CHECK (cash_paise + upi_paise + credit_paise = total_paise),\
-CHECK (credit_paise = 0 OR customer_id IS NOT NULL),\
-source entry_source NOT NULL DEFAULT 'manual',\
-created_at TIMESTAMPTZ NOT NULL DEFAULT now(),\
-updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),\
-deleted_at TIMESTAMPTZ,\
-created_by UUID NOT NULL, device_id TEXT, server_seq BIGINT\
-);\
-CREATE INDEX ix_sales_shop_time ON sales(shop_id, sale_time);\
-\
-CREATE TABLE sale_items (\
-id UUID PRIMARY KEY,\
-shop_id UUID NOT NULL REFERENCES shops(id),\
-sale_id UUID NOT NULL REFERENCES sales(id),\
-product_id UUID REFERENCES products(id),\
-item_text TEXT,\
-qty NUMERIC(12,3) NOT NULL CHECK (qty \> 0),\
-unit unit_code NOT NULL,\
-unit_price_paise BIGINT NOT NULL CHECK (unit_price_paise \>= 0),\
-line_total_paise BIGINT NOT NULL CHECK (line_total_paise \>= 0),\
-created_at TIMESTAMPTZ NOT NULL DEFAULT now(),\
-updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),\
-deleted_at TIMESTAMPTZ,\
-created_by UUID, device_id TEXT, server_seq BIGINT\
-);\
-\
-CREATE TABLE ledger_entries (\
-id UUID PRIMARY KEY,\
-shop_id UUID NOT NULL REFERENCES shops(id),\
-customer_id UUID NOT NULL REFERENCES customers(id),\
-entry_type ledger_type NOT NULL,\
-amount_paise BIGINT NOT NULL,\
-CHECK ((entry_type = 'credit' AND amount_paise \> 0)\
-OR (entry_type = 'payment' AND amount_paise \< 0)\
-OR (entry_type = 'adjustment' AND amount_paise \<\> 0)),\
-payment_mode pay_mode,\
-CHECK (entry_type \<\> 'payment' OR payment_mode IS NOT NULL),\
-sale_id UUID REFERENCES sales(id),\
-note TEXT,\
-reason TEXT,\
-CHECK (entry_type \<\> 'adjustment' OR length(reason) \> 0),\
-entry_time TIMESTAMPTZ NOT NULL,\
-due_date DATE,\
-source entry_source NOT NULL DEFAULT 'manual',\
-created_at TIMESTAMPTZ NOT NULL DEFAULT now(),\
-updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),\
-deleted_at TIMESTAMPTZ,\
-created_by UUID NOT NULL, device_id TEXT, server_seq BIGINT\
-);\
-CREATE INDEX ix_ledger_customer ON ledger_entries(customer_id, entry_time);\
-CREATE INDEX ix_ledger_shop_time ON ledger_entries(shop_id, entry_time);\
-\
-CREATE TABLE supplier_entries (\
-id UUID PRIMARY KEY,\
-shop_id UUID NOT NULL REFERENCES shops(id),\
-supplier_id UUID NOT NULL REFERENCES suppliers(id),\
-entry_type supplier_type NOT NULL,\
-amount_paise BIGINT NOT NULL,\
-CHECK ((entry_type = 'purchase' AND amount_paise \> 0)\
-OR (entry_type = 'payment' AND amount_paise \< 0)\
-OR (entry_type = 'adjustment' AND amount_paise \<\> 0)),\
-payment_mode pay_mode,\
-bill_photo_path TEXT,\
-note TEXT, reason TEXT,\
-entry_time TIMESTAMPTZ NOT NULL,\
-created_at TIMESTAMPTZ NOT NULL DEFAULT now(),\
-updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),\
-deleted_at TIMESTAMPTZ,\
-created_by UUID NOT NULL, device_id TEXT, server_seq BIGINT\
-);\
-\
-CREATE TABLE stock_movements (\
-id UUID PRIMARY KEY,\
-shop_id UUID NOT NULL REFERENCES shops(id),\
-product_id UUID NOT NULL REFERENCES products(id),\
-movement_type move_type NOT NULL,\
-qty_change NUMERIC(12,3) NOT NULL CHECK (qty_change \<\> 0),\
-unit_cost_paise BIGINT,\
-sale_id UUID REFERENCES sales(id),\
-supplier_entry_id UUID REFERENCES supplier_entries(id),\
-expiry_date DATE,\
-reason TEXT,\
-movement_time TIMESTAMPTZ NOT NULL,\
-created_at TIMESTAMPTZ NOT NULL DEFAULT now(),\
-updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),\
-deleted_at TIMESTAMPTZ,\
-created_by UUID NOT NULL, device_id TEXT, server_seq BIGINT\
-);\
-CREATE INDEX ix_stock_product ON stock_movements(product_id, movement_time);\
-\
-CREATE TABLE reminders (\
-id UUID PRIMARY KEY,\
-shop_id UUID NOT NULL REFERENCES shops(id),\
-customer_id UUID NOT NULL REFERENCES customers(id),\
-channel channel_code NOT NULL,\
-balance_paise BIGINT NOT NULL,\
-message_text TEXT NOT NULL,\
-lang lang_code NOT NULL,\
-sent_at TIMESTAMPTZ NOT NULL,\
-created_at TIMESTAMPTZ NOT NULL DEFAULT now(),\
-updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),\
-deleted_at TIMESTAMPTZ,\
-created_by UUID NOT NULL, device_id TEXT, server_seq BIGINT\
-);\
-\
-CREATE TABLE voice_logs (\
-id UUID PRIMARY KEY,\
-shop_id UUID NOT NULL REFERENCES shops(id),\
-transcript TEXT NOT NULL,\
-lang TEXT,\
-intent TEXT,\
-entities JSONB,\
-confidence NUMERIC(4,3),\
-engine TEXT, -- android_ondevice, web_speech, bhashini\
-outcome TEXT CHECK (outcome IN ('confirmed','corrected','cancelled','failed','answered')),\
-created_at TIMESTAMPTZ NOT NULL DEFAULT now(),\
-updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),\
-deleted_at TIMESTAMPTZ,\
-created_by UUID, device_id TEXT, server_seq BIGINT\
-);\
-\
-CREATE TABLE audit_log (\
-id UUID PRIMARY KEY,\
-shop_id UUID NOT NULL REFERENCES shops(id),\
-table_name TEXT NOT NULL,\
-record_id UUID NOT NULL,\
-action TEXT NOT NULL CHECK (action IN ('adjust','undo','update','settings','conflict')),\
-old_values JSONB, new_values JSONB,\
-reason TEXT,\
-created_at TIMESTAMPTZ NOT NULL DEFAULT now(),\
-updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),\
-deleted_at TIMESTAMPTZ,\
-created_by UUID, device_id TEXT, server_seq BIGINT\
-);\
-\
--- Attach the sync trigger to every synced table\
-DO \$\$\
-DECLARE t TEXT;\
-BEGIN\
-FOREACH t IN ARRAY ARRAY\['shops','shop_members','customers','suppliers','products','sales',\
-'sale_items','ledger_entries','supplier_entries','stock_movements','reminders','voice_logs','audit_log'\]\
-LOOP\
-EXECUTE format('CREATE TRIGGER trg_sync_%1\$s BEFORE INSERT OR UPDATE ON %1\$s\
-FOR EACH ROW EXECUTE FUNCTION set_sync_fields()', t);\
-IF t \<\> 'shops' THEN\
-EXECUTE format('CREATE INDEX ix_%1\$s_seq ON %1\$s(shop_id, server_seq)', t);\
-END IF;\
-END LOOP;\
-END \$\$;\
-\
--- Views used by reports and voice answers\
-CREATE VIEW v_customer_balance AS\
-SELECT c.shop_id, c.id AS customer_id, c.full_name, c.village, c.phone, c.credit_limit_paise,\
-c.opening_balance_paise + COALESCE(SUM(l.amount_paise), 0) AS balance_paise,\
-MAX(l.entry_time) FILTER (WHERE l.entry_type = 'credit') AS last_credit_at,\
-MAX(l.entry_time) FILTER (WHERE l.entry_type = 'payment') AS last_payment_at\
-FROM customers c\
-LEFT JOIN ledger_entries l ON l.customer_id = c.id AND l.deleted_at IS NULL\
-WHERE c.deleted_at IS NULL\
-GROUP BY c.id;\
-\
-CREATE VIEW v_supplier_due AS\
-SELECT s.shop_id, s.id AS supplier_id, s.name,\
-s.opening_due_paise + COALESCE(SUM(e.amount_paise), 0) AS due_paise,\
-MAX(e.entry_time) FILTER (WHERE e.entry_type = 'payment') AS last_payment_at\
-FROM suppliers s\
-LEFT JOIN supplier_entries e ON e.supplier_id = s.id AND e.deleted_at IS NULL\
-WHERE s.deleted_at IS NULL\
-GROUP BY s.id;\
-\
-CREATE VIEW v_stock_on_hand AS\
-SELECT p.shop_id, p.id AS product_id, p.name_local, p.name_latin, p.unit, p.reorder_level,\
-COALESCE(SUM(m.qty_change), 0) AS qty_on_hand\
-FROM products p\
-LEFT JOIN stock_movements m ON m.product_id = p.id AND m.deleted_at IS NULL\
-WHERE p.deleted_at IS NULL\
+```
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+
+CREATE SEQUENCE sync_seq;
+
+CREATE OR REPLACE FUNCTION set_sync_fields() RETURNS trigger AS $$
+BEGIN
+NEW.server_seq := nextval('sync_seq');
+IF TG_OP = 'UPDATE' THEN NEW.updated_at := GREATEST(NEW.updated_at, OLD.updated_at); END IF;
+RETURN NEW;
+END $$ LANGUAGE plpgsql;
+
+-- Enums
+CREATE TYPE member_role AS ENUM ('owner','helper');
+CREATE TYPE lang_code AS ENUM ('kn','hi','en');
+CREATE TYPE ledger_type AS ENUM ('credit','payment','adjustment');
+CREATE TYPE supplier_type AS ENUM ('purchase','payment','adjustment');
+CREATE TYPE pay_mode AS ENUM ('cash','upi','other');
+CREATE TYPE unit_code AS ENUM ('kg','g','l','ml','pcs','pkt','dozen','box');
+CREATE TYPE move_type AS ENUM ('opening','purchase','sale','return_in','damage','adjustment');
+CREATE TYPE entry_source AS ENUM ('manual','voice','import');
+CREATE TYPE channel_code AS ENUM ('sms','whatsapp');
+
+CREATE TABLE shops (
+id UUID PRIMARY KEY,
+name TEXT NOT NULL CHECK (length(name) BETWEEN 2 AND 120),
+owner_name TEXT NOT NULL,
+phone TEXT,
+village TEXT, taluk TEXT, district TEXT, state TEXT,
+upi_vpa TEXT,
+default_lang lang_code NOT NULL DEFAULT 'kn',
+timezone TEXT NOT NULL DEFAULT 'Asia/Kolkata',
+helper_pin_limit_paise BIGINT NOT NULL DEFAULT 50000, -- Rs 500
+plan TEXT NOT NULL DEFAULT 'free_intro',
+trial_ends_at DATE,
+gst_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+deleted_at TIMESTAMPTZ,
+created_by UUID, device_id TEXT,
+server_seq BIGINT
+);
+
+CREATE TABLE shop_members (
+id UUID PRIMARY KEY,
+shop_id UUID NOT NULL REFERENCES shops(id),
+user_id UUID REFERENCES auth.users(id), -- NULL until helper accepts invite
+invite_email TEXT,
+role member_role NOT NULL,
+display_name TEXT NOT NULL,
+pin_hash TEXT, -- argon2id; verified on device
+is_active BOOLEAN NOT NULL DEFAULT TRUE,
+created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+deleted_at TIMESTAMPTZ,
+created_by UUID, device_id TEXT, server_seq BIGINT,
+UNIQUE (shop_id, user_id)
+);
+
+CREATE TABLE customers (
+id UUID PRIMARY KEY,
+shop_id UUID NOT NULL REFERENCES shops(id),
+full_name TEXT NOT NULL CHECK (length(full_name) BETWEEN 1 AND 100),
+name_latin TEXT NOT NULL,
+nickname TEXT,
+phonetic_key TEXT,
+phone TEXT CHECK (phone IS NULL OR phone ~ '^[6-9][0-9]{9}$'),
+village TEXT,
+photo_path TEXT,
+lang lang_code NOT NULL DEFAULT 'kn',
+credit_limit_paise BIGINT CHECK (credit_limit_paise IS NULL OR credit_limit_paise >= 0),
+opening_balance_paise BIGINT NOT NULL DEFAULT 0,
+reminder_opt_in BOOLEAN NOT NULL DEFAULT FALSE,
+notes TEXT,
+created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+deleted_at TIMESTAMPTZ,
+created_by UUID, device_id TEXT, server_seq BIGINT
+);
+CREATE INDEX ix_customers_shop ON customers(shop_id) WHERE deleted_at IS NULL;
+CREATE INDEX ix_customers_trgm ON customers USING gin (name_latin gin_trgm_ops);
+
+CREATE TABLE suppliers (
+id UUID PRIMARY KEY,
+shop_id UUID NOT NULL REFERENCES shops(id),
+name TEXT NOT NULL, name_latin TEXT NOT NULL,
+phone TEXT, town TEXT,
+opening_due_paise BIGINT NOT NULL DEFAULT 0,
+created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+deleted_at TIMESTAMPTZ,
+created_by UUID, device_id TEXT, server_seq BIGINT
+);
+
+CREATE TABLE products (
+id UUID PRIMARY KEY,
+shop_id UUID NOT NULL REFERENCES shops(id),
+name_local TEXT NOT NULL,
+name_latin TEXT NOT NULL,
+aliases TEXT[] NOT NULL DEFAULT '{}', -- e.g. {akki,chawal,rice}
+category TEXT,
+unit unit_code NOT NULL,
+sell_price_paise BIGINT NOT NULL CHECK (sell_price_paise >= 0),
+cost_price_paise BIGINT CHECK (cost_price_paise IS NULL OR cost_price_paise >= 0),
+reorder_level NUMERIC(12,3) NOT NULL DEFAULT 0,
+barcode TEXT,
+created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+deleted_at TIMESTAMPTZ,
+created_by UUID, device_id TEXT, server_seq BIGINT
+);
+
+CREATE TABLE sales (
+id UUID PRIMARY KEY,
+shop_id UUID NOT NULL REFERENCES shops(id),
+customer_id UUID REFERENCES customers(id),
+sale_time TIMESTAMPTZ NOT NULL,
+total_paise BIGINT NOT NULL CHECK (total_paise >= 0),
+cash_paise BIGINT NOT NULL DEFAULT 0 CHECK (cash_paise >= 0),
+upi_paise BIGINT NOT NULL DEFAULT 0 CHECK (upi_paise >= 0),
+credit_paise BIGINT NOT NULL DEFAULT 0 CHECK (credit_paise >= 0),
+CHECK (cash_paise + upi_paise + credit_paise = total_paise),
+CHECK (credit_paise = 0 OR customer_id IS NOT NULL),
+source entry_source NOT NULL DEFAULT 'manual',
+created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+deleted_at TIMESTAMPTZ,
+created_by UUID NOT NULL, device_id TEXT, server_seq BIGINT
+);
+CREATE INDEX ix_sales_shop_time ON sales(shop_id, sale_time);
+
+CREATE TABLE sale_items (
+id UUID PRIMARY KEY,
+shop_id UUID NOT NULL REFERENCES shops(id),
+sale_id UUID NOT NULL REFERENCES sales(id),
+product_id UUID REFERENCES products(id),
+item_text TEXT,
+qty NUMERIC(12,3) NOT NULL CHECK (qty > 0),
+unit unit_code NOT NULL,
+unit_price_paise BIGINT NOT NULL CHECK (unit_price_paise >= 0),
+line_total_paise BIGINT NOT NULL CHECK (line_total_paise >= 0),
+created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+deleted_at TIMESTAMPTZ,
+created_by UUID, device_id TEXT, server_seq BIGINT
+);
+
+CREATE TABLE ledger_entries (
+id UUID PRIMARY KEY,
+shop_id UUID NOT NULL REFERENCES shops(id),
+customer_id UUID NOT NULL REFERENCES customers(id),
+entry_type ledger_type NOT NULL,
+amount_paise BIGINT NOT NULL,
+CHECK ((entry_type = 'credit' AND amount_paise > 0)
+OR (entry_type = 'payment' AND amount_paise < 0)
+OR (entry_type = 'adjustment' AND amount_paise <> 0)),
+payment_mode pay_mode,
+CHECK (entry_type <> 'payment' OR payment_mode IS NOT NULL),
+sale_id UUID REFERENCES sales(id),
+note TEXT,
+reason TEXT,
+CHECK (entry_type <> 'adjustment' OR length(reason) > 0),
+entry_time TIMESTAMPTZ NOT NULL,
+due_date DATE,
+source entry_source NOT NULL DEFAULT 'manual',
+created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+deleted_at TIMESTAMPTZ,
+created_by UUID NOT NULL, device_id TEXT, server_seq BIGINT
+);
+CREATE INDEX ix_ledger_customer ON ledger_entries(customer_id, entry_time);
+CREATE INDEX ix_ledger_shop_time ON ledger_entries(shop_id, entry_time);
+
+CREATE TABLE supplier_entries (
+id UUID PRIMARY KEY,
+shop_id UUID NOT NULL REFERENCES shops(id),
+supplier_id UUID NOT NULL REFERENCES suppliers(id),
+entry_type supplier_type NOT NULL,
+amount_paise BIGINT NOT NULL,
+CHECK ((entry_type = 'purchase' AND amount_paise > 0)
+OR (entry_type = 'payment' AND amount_paise < 0)
+OR (entry_type = 'adjustment' AND amount_paise <> 0)),
+payment_mode pay_mode,
+bill_photo_path TEXT,
+note TEXT, reason TEXT,
+entry_time TIMESTAMPTZ NOT NULL,
+created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+deleted_at TIMESTAMPTZ,
+created_by UUID NOT NULL, device_id TEXT, server_seq BIGINT
+);
+
+CREATE TABLE stock_movements (
+id UUID PRIMARY KEY,
+shop_id UUID NOT NULL REFERENCES shops(id),
+product_id UUID NOT NULL REFERENCES products(id),
+movement_type move_type NOT NULL,
+qty_change NUMERIC(12,3) NOT NULL CHECK (qty_change <> 0),
+unit_cost_paise BIGINT,
+sale_id UUID REFERENCES sales(id),
+supplier_entry_id UUID REFERENCES supplier_entries(id),
+expiry_date DATE,
+reason TEXT,
+movement_time TIMESTAMPTZ NOT NULL,
+created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+deleted_at TIMESTAMPTZ,
+created_by UUID NOT NULL, device_id TEXT, server_seq BIGINT
+);
+CREATE INDEX ix_stock_product ON stock_movements(product_id, movement_time);
+
+CREATE TABLE reminders (
+id UUID PRIMARY KEY,
+shop_id UUID NOT NULL REFERENCES shops(id),
+customer_id UUID NOT NULL REFERENCES customers(id),
+channel channel_code NOT NULL,
+balance_paise BIGINT NOT NULL,
+message_text TEXT NOT NULL,
+lang lang_code NOT NULL,
+sent_at TIMESTAMPTZ NOT NULL,
+created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+deleted_at TIMESTAMPTZ,
+created_by UUID NOT NULL, device_id TEXT, server_seq BIGINT
+);
+
+CREATE TABLE voice_logs (
+id UUID PRIMARY KEY,
+shop_id UUID NOT NULL REFERENCES shops(id),
+transcript TEXT NOT NULL,
+lang TEXT,
+intent TEXT,
+entities JSONB,
+confidence NUMERIC(4,3),
+engine TEXT, -- android_ondevice, web_speech, bhashini
+outcome TEXT CHECK (outcome IN ('confirmed','corrected','cancelled','failed','answered')),
+created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+deleted_at TIMESTAMPTZ,
+created_by UUID, device_id TEXT, server_seq BIGINT
+);
+
+CREATE TABLE audit_log (
+id UUID PRIMARY KEY,
+shop_id UUID NOT NULL REFERENCES shops(id),
+table_name TEXT NOT NULL,
+record_id UUID NOT NULL,
+action TEXT NOT NULL CHECK (action IN ('adjust','undo','update','settings','conflict')),
+old_values JSONB, new_values JSONB,
+reason TEXT,
+created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+deleted_at TIMESTAMPTZ,
+created_by UUID, device_id TEXT, server_seq BIGINT
+);
+
+-- Attach the sync trigger to every synced table
+DO $$
+DECLARE t TEXT;
+BEGIN
+FOREACH t IN ARRAY ARRAY['shops','shop_members','customers','suppliers','products','sales',
+'sale_items','ledger_entries','supplier_entries','stock_movements','reminders','voice_logs','audit_log']
+LOOP
+EXECUTE format('CREATE TRIGGER trg_sync_%1$s BEFORE INSERT OR UPDATE ON %1$s
+FOR EACH ROW EXECUTE FUNCTION set_sync_fields()', t);
+IF t <> 'shops' THEN
+EXECUTE format('CREATE INDEX ix_%1$s_seq ON %1$s(shop_id, server_seq)', t);
+END IF;
+END LOOP;
+END $$;
+
+-- Views used by reports and voice answers
+CREATE VIEW v_customer_balance AS
+SELECT c.shop_id, c.id AS customer_id, c.full_name, c.village, c.phone, c.credit_limit_paise,
+c.opening_balance_paise + COALESCE(SUM(l.amount_paise), 0) AS balance_paise,
+MAX(l.entry_time) FILTER (WHERE l.entry_type = 'credit') AS last_credit_at,
+MAX(l.entry_time) FILTER (WHERE l.entry_type = 'payment') AS last_payment_at
+FROM customers c
+LEFT JOIN ledger_entries l ON l.customer_id = c.id AND l.deleted_at IS NULL
+WHERE c.deleted_at IS NULL
+GROUP BY c.id;
+
+CREATE VIEW v_supplier_due AS
+SELECT s.shop_id, s.id AS supplier_id, s.name,
+s.opening_due_paise + COALESCE(SUM(e.amount_paise), 0) AS due_paise,
+MAX(e.entry_time) FILTER (WHERE e.entry_type = 'payment') AS last_payment_at
+FROM suppliers s
+LEFT JOIN supplier_entries e ON e.supplier_id = s.id AND e.deleted_at IS NULL
+WHERE s.deleted_at IS NULL
+GROUP BY s.id;
+
+CREATE VIEW v_stock_on_hand AS
+SELECT p.shop_id, p.id AS product_id, p.name_local, p.name_latin, p.unit, p.reorder_level,
+COALESCE(SUM(m.qty_change), 0) AS qty_on_hand
+FROM products p
+LEFT JOIN stock_movements m ON m.product_id = p.id AND m.deleted_at IS NULL
+WHERE p.deleted_at IS NULL
 GROUP BY p.id;
+```
 
 The device (drift) MUST mirror these tables column for column, with TEXT for UUIDs and ISO-8601 text or integer milliseconds for timestamps, and the same three views written as drift queries. Any schema change is a new numbered migration in both places, in the same pull request.
 
 **Row Level Security — supabase/migrations/0002_rls.sql**
 
-CREATE OR REPLACE FUNCTION is_member(p_shop UUID) RETURNS BOOLEAN\
-LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS \$\$\
-SELECT EXISTS (SELECT 1 FROM shop_members\
-WHERE shop_id = p_shop AND user_id = auth.uid()\
-AND is_active AND deleted_at IS NULL);\
-\$\$;\
-\
-CREATE OR REPLACE FUNCTION is_owner(p_shop UUID) RETURNS BOOLEAN\
-LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS \$\$\
-SELECT EXISTS (SELECT 1 FROM shop_members\
-WHERE shop_id = p_shop AND user_id = auth.uid()\
-AND role = 'owner' AND is_active AND deleted_at IS NULL);\
-\$\$;\
-\
--- Enable RLS on every table, then: members read; members insert; no hard deletes.\
--- Example for ledger_entries (repeat the pattern per table):\
-ALTER TABLE ledger_entries ENABLE ROW LEVEL SECURITY;\
-\
-CREATE POLICY le_select ON ledger_entries FOR SELECT USING (is_member(shop_id));\
-\
-CREATE POLICY le_insert ON ledger_entries FOR INSERT WITH CHECK (\
-is_member(shop_id) AND created_by = auth.uid()\
-AND (entry_type \<\> 'adjustment' OR is_owner(shop_id))\
-);\
-\
--- Only change allowed after insert: soft delete (undo) by the creator within 10 minutes, or by the owner.\
-CREATE POLICY le_update ON ledger_entries FOR UPDATE USING (is_member(shop_id)) WITH CHECK (\
-is_owner(shop_id)\
-OR (created_by = auth.uid() AND deleted_at IS NOT NULL\
-AND deleted_at - created_at \<= interval '10 minutes')\
-);\
--- No DELETE policy = hard deletes are refused.\
-\
--- Owner-only tables/actions: shop settings, shop_members, audit_log read, reports.\
-CREATE POLICY shops_update ON shops FOR UPDATE USING (is_owner(id));\
-CREATE POLICY members_write ON shop_members FOR ALL USING (is_owner(shop_id)) WITH CHECK (is_owner(shop_id));\
+```
+CREATE OR REPLACE FUNCTION is_member(p_shop UUID) RETURNS BOOLEAN
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+SELECT EXISTS (SELECT 1 FROM shop_members
+WHERE shop_id = p_shop AND user_id = auth.uid()
+AND is_active AND deleted_at IS NULL);
+$$;
+
+CREATE OR REPLACE FUNCTION is_owner(p_shop UUID) RETURNS BOOLEAN
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+SELECT EXISTS (SELECT 1 FROM shop_members
+WHERE shop_id = p_shop AND user_id = auth.uid()
+AND role = 'owner' AND is_active AND deleted_at IS NULL);
+$$;
+
+-- Enable RLS on every table, then: members read; members insert; no hard deletes.
+-- Example for ledger_entries (repeat the pattern per table):
+ALTER TABLE ledger_entries ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY le_select ON ledger_entries FOR SELECT USING (is_member(shop_id));
+
+CREATE POLICY le_insert ON ledger_entries FOR INSERT WITH CHECK (
+is_member(shop_id) AND created_by = auth.uid()
+AND (entry_type <> 'adjustment' OR is_owner(shop_id))
+);
+
+-- Only change allowed after insert: soft delete (undo) by the creator within 10 minutes, or by the owner.
+CREATE POLICY le_update ON ledger_entries FOR UPDATE USING (is_member(shop_id)) WITH CHECK (
+is_owner(shop_id)
+OR (created_by = auth.uid() AND deleted_at IS NOT NULL
+AND deleted_at - created_at <= interval '10 minutes')
+);
+-- No DELETE policy = hard deletes are refused.
+
+-- Owner-only tables/actions: shop settings, shop_members, audit_log read, reports.
+CREATE POLICY shops_update ON shops FOR UPDATE USING (is_owner(id));
+CREATE POLICY members_write ON shop_members FOR ALL USING (is_owner(shop_id)) WITH CHECK (is_owner(shop_id));
 CREATE POLICY audit_select ON audit_log FOR SELECT USING (is_owner(shop_id));
+```
 
 A trigger on ledger_entries, supplier_entries and stock_movements MUST reject any update that changes a column other than deleted_at and updated_at (enforces immutability).
 
@@ -602,21 +608,23 @@ Sync is push-then-pull over two Edge Functions, called with the user's own login
 
 **Device tables for sync (drift only)**
 
-CREATE TABLE outbox (\
-seq INTEGER PRIMARY KEY AUTOINCREMENT,\
-table_name TEXT NOT NULL,\
-row_id TEXT NOT NULL,\
-payload TEXT NOT NULL, -- full row as JSON, as it is after the change\
-created_at INTEGER NOT NULL, -- epoch ms\
-attempts INTEGER NOT NULL DEFAULT 0,\
-last_error TEXT,\
-status TEXT NOT NULL DEFAULT 'pending' -- pending \| rejected\
-);\
-CREATE TABLE sync_state (\
-table_name TEXT PRIMARY KEY,\
-last_server_seq INTEGER NOT NULL DEFAULT 0,\
-last_pulled_at INTEGER\
+```
+CREATE TABLE outbox (
+seq INTEGER PRIMARY KEY AUTOINCREMENT,
+table_name TEXT NOT NULL,
+row_id TEXT NOT NULL,
+payload TEXT NOT NULL, -- full row as JSON, as it is after the change
+created_at INTEGER NOT NULL, -- epoch ms
+attempts INTEGER NOT NULL DEFAULT 0,
+last_error TEXT,
+status TEXT NOT NULL DEFAULT 'pending' -- pending | rejected
 );
+CREATE TABLE sync_state (
+table_name TEXT PRIMARY KEY,
+last_server_seq INTEGER NOT NULL DEFAULT 0,
+last_pulled_at INTEGER
+);
+```
 
 **Write rule (every repository method that changes data)** — in ONE local transaction: write the row, then insert an outbox row with the full row JSON. If either fails, both roll back.
 
@@ -638,34 +646,38 @@ last_pulled_at INTEGER\
 
 **API-01 — POST /functions/v1/sync-push**
 
-// Request (Authorization: Bearer \<user JWT\>)\
-{\
-"device_id": "a1b2c3",\
-"shop_id": "6f0c…",\
-"changes": \[\
-{ "table": "ledger_entries", "row": { "id": "…", "customer_id": "…", "entry_type": "credit",\
-"amount_paise": 20000, "note": "rice, oil", "entry_time": "2026-11-03T08:12:00Z",\
-"source": "voice", "created_by": "…", "created_at": "…", "updated_at": "…", "deleted_at": null } }\
-\]\
-}\
-// Response 200\
-{\
-"applied": \["\<id\>", "\<id\>"\],\
-"rejected": \[ { "id": "\<id\>", "code": "RLS_DENIED", "message": "helper cannot add adjustment" } \]\
+```
+// Request (Authorization: Bearer <user JWT>)
+{
+"device_id": "a1b2c3",
+"shop_id": "6f0c…",
+"changes": [
+{ "table": "ledger_entries", "row": { "id": "…", "customer_id": "…", "entry_type": "credit",
+"amount_paise": 20000, "note": "rice, oil", "entry_time": "2026-11-03T08:12:00Z",
+"source": "voice", "created_by": "…", "created_at": "…", "updated_at": "…", "deleted_at": null } }
+]
 }
+// Response 200
+{
+"applied": ["<id>", "<id>"],
+"rejected": [ { "id": "<id>", "code": "RLS_DENIED", "message": "helper cannot add adjustment" } ]
+}
+```
 
 Server rules: max 100 changes per call; tables allowed = the 13 synced tables only; upsert ON CONFLICT (id). For ledger tables an existing row may only change deleted_at/updated_at; for master tables update only if incoming updated_at ≥ stored, else return it in applied but write an audit_log row with action conflict. Rejection codes: RLS_DENIED, VALIDATION, IMMUTABLE, UNKNOWN_TABLE, FK_MISSING (retry later: parent not yet synced — this one is NOT permanent).
 
 **API-02 — POST /functions/v1/sync-pull**
 
-// Request\
-{ "shop_id": "6f0c…", "cursors": { "customers": 1840, "ledger_entries": 1902, "products": 0 }, "limit": 500 }\
-// Response 200\
-{\
-"changes": { "customers": \[ { "id": "…", "server_seq": 1851, "...": "..." } \], "ledger_entries": \[\] },\
-"cursors": { "customers": 1851, "ledger_entries": 1902, "products": 0 },\
-"has_more": false\
+```
+// Request
+{ "shop_id": "6f0c…", "cursors": { "customers": 1840, "ledger_entries": 1902, "products": 0 }, "limit": 500 }
+// Response 200
+{
+"changes": { "customers": [ { "id": "…", "server_seq": 1851, "...": "..." } ], "ledger_entries": [] },
+"cursors": { "customers": 1851, "ledger_entries": 1902, "products": 0 },
+"has_more": false
 }
+```
 
 Order of tables in push and pull (parents first): shops, shop_members, customers, suppliers, products, sales, sale_items, ledger_entries, supplier_entries, stock_movements, reminders, voice_logs, audit_log.
 
@@ -1011,20 +1023,22 @@ Build in this order; each step ends with a reviewed pull request that passes CI 
 
 **Standard preamble — paste before every step prompt**
 
-You are building "Vyavahara" (tagline: ನಿಮ್ಮ ಪೂರ್ತಿ ವ್ಯವಹಾರ, ಒಂದೇ ಕಡೆ), an offline-first\
-Flutter (Android + web) app on Supabase for village merchants. The file\
-docs/srs.md in this repo is the single source of truth. Follow it literally.\
-Rules:\
-\- Implement ONLY the build step named below. Read the sections it lists first.\
-\- Use the fixed tech stack and repo layout in section 3. Do not add packages\
-not listed there without asking.\
-\- Use exact table/column names from section 4 and IDs from sections 5-8.\
-\- Write tests for every acceptance check you implement.\
-\- All user-facing text goes in ARB files (kn, hi, en). No hard-coded strings.\
-\- Work on branch feat/m\<N\>-\<name\>; Conventional Commits; open a PR listing the\
-IDs implemented; never push to main; never commit secrets.\
-\- If anything is unclear or missing in docs/srs.md, STOP and ask.\
+```
+You are building "Vyavahara" (tagline: ನಿಮ್ಮ ಪೂರ್ತಿ ವ್ಯವಹಾರ, ಒಂದೇ ಕಡೆ), an offline-first
+Flutter (Android + web) app on Supabase for village merchants. The file
+docs/srs.md in this repo is the single source of truth. Follow it literally.
+Rules:
+- Implement ONLY the build step named below. Read the sections it lists first.
+- Use the fixed tech stack and repo layout in section 3. Do not add packages
+not listed there without asking.
+- Use exact table/column names from section 4 and IDs from sections 5-8.
+- Write tests for every acceptance check you implement.
+- All user-facing text goes in ARB files (kn, hi, en). No hard-coded strings.
+- Work on branch feat/m<N>-<name>; Conventional Commits; open a PR listing the
+IDs implemented; never push to main; never commit secrets.
+- If anything is unclear or missing in docs/srs.md, STOP and ask.
 Start by posting a short plan (files, tests, open questions) and wait for "go".
+```
 
 **M0 — Repository and CI (week 1)**
 
@@ -1139,46 +1153,48 @@ Every FR, VA and NFR ID maps to at least one automated test whose name contains 
 
 **Reference SQL for report tests (Postgres; mirror in drift)**
 
--- Today summary for a shop (in shop timezone)\
-WITH b AS (\
-SELECT (date_trunc('day', now() AT TIME ZONE s.timezone) AT TIME ZONE s.timezone) AS day_start\
-FROM shops s WHERE s.id = :shop_id\
-)\
-SELECT\
-COALESCE(SUM(sa.total_paise), 0) AS sales_paise,\
-COALESCE(SUM(sa.cash_paise), 0) AS cash_paise,\
-COALESCE(SUM(sa.upi_paise), 0) AS upi_paise,\
-COALESCE(SUM(sa.credit_paise), 0) AS credit_from_bills_paise,\
-(SELECT COALESCE(SUM(amount_paise), 0) FROM ledger_entries l, b\
-WHERE l.shop_id = :shop_id AND l.entry_type = 'credit' AND l.deleted_at IS NULL\
-AND l.entry_time \>= b.day_start AND l.entry_time \< b.day_start + interval '1 day') AS credit_given_paise,\
-(SELECT COALESCE(-SUM(amount_paise), 0) FROM ledger_entries l, b\
-WHERE l.shop_id = :shop_id AND l.entry_type = 'payment' AND l.deleted_at IS NULL\
-AND l.entry_time \>= b.day_start AND l.entry_time \< b.day_start + interval '1 day') AS collected_paise,\
-(SELECT COALESCE(-SUM(amount_paise), 0) FROM ledger_entries l, b\
-WHERE l.shop_id = :shop_id AND l.entry_type = 'payment' AND l.payment_mode = 'cash' AND l.deleted_at IS NULL\
-AND l.entry_time \>= b.day_start AND l.entry_time \< b.day_start + interval '1 day') AS collected_cash_paise\
-FROM b\
-LEFT JOIN sales sa ON sa.shop_id = :shop_id AND sa.deleted_at IS NULL\
-AND sa.sale_time \>= b.day_start AND sa.sale_time \< b.day_start + interval '1 day';\
--- expected cash in drawer = cash_paise + collected_cash_paise\
-\
--- Overdue list\
-SELECT customer_id, full_name, village, balance_paise, last_payment_at\
-FROM v_customer_balance\
-WHERE shop_id = :shop_id AND balance_paise \>= :min_paise\
-AND COALESCE(last_payment_at, last_credit_at) \< now() - make_interval(days =\> :days)\
-ORDER BY balance_paise DESC;\
-\
--- Low stock with days left\
-SELECT s.product_id, s.name_local, s.qty_on_hand, s.reorder_level,\
-ROUND(s.qty_on_hand / NULLIF(-SUM(m.qty_change) / 30.0, 0), 1) AS days_left\
-FROM v_stock_on_hand s\
-LEFT JOIN stock_movements m ON m.product_id = s.product_id AND m.movement_type = 'sale'\
-AND m.deleted_at IS NULL AND m.movement_time \>= now() - interval '30 days'\
-WHERE s.shop_id = :shop_id AND s.qty_on_hand \<= s.reorder_level\
-GROUP BY s.product_id, s.name_local, s.qty_on_hand, s.reorder_level\
+```
+-- Today summary for a shop (in shop timezone)
+WITH b AS (
+SELECT (date_trunc('day', now() AT TIME ZONE s.timezone) AT TIME ZONE s.timezone) AS day_start
+FROM shops s WHERE s.id = :shop_id
+)
+SELECT
+COALESCE(SUM(sa.total_paise), 0) AS sales_paise,
+COALESCE(SUM(sa.cash_paise), 0) AS cash_paise,
+COALESCE(SUM(sa.upi_paise), 0) AS upi_paise,
+COALESCE(SUM(sa.credit_paise), 0) AS credit_from_bills_paise,
+(SELECT COALESCE(SUM(amount_paise), 0) FROM ledger_entries l, b
+WHERE l.shop_id = :shop_id AND l.entry_type = 'credit' AND l.deleted_at IS NULL
+AND l.entry_time >= b.day_start AND l.entry_time < b.day_start + interval '1 day') AS credit_given_paise,
+(SELECT COALESCE(-SUM(amount_paise), 0) FROM ledger_entries l, b
+WHERE l.shop_id = :shop_id AND l.entry_type = 'payment' AND l.deleted_at IS NULL
+AND l.entry_time >= b.day_start AND l.entry_time < b.day_start + interval '1 day') AS collected_paise,
+(SELECT COALESCE(-SUM(amount_paise), 0) FROM ledger_entries l, b
+WHERE l.shop_id = :shop_id AND l.entry_type = 'payment' AND l.payment_mode = 'cash' AND l.deleted_at IS NULL
+AND l.entry_time >= b.day_start AND l.entry_time < b.day_start + interval '1 day') AS collected_cash_paise
+FROM b
+LEFT JOIN sales sa ON sa.shop_id = :shop_id AND sa.deleted_at IS NULL
+AND sa.sale_time >= b.day_start AND sa.sale_time < b.day_start + interval '1 day';
+-- expected cash in drawer = cash_paise + collected_cash_paise
+
+-- Overdue list
+SELECT customer_id, full_name, village, balance_paise, last_payment_at
+FROM v_customer_balance
+WHERE shop_id = :shop_id AND balance_paise >= :min_paise
+AND COALESCE(last_payment_at, last_credit_at) < now() - make_interval(days => :days)
+ORDER BY balance_paise DESC;
+
+-- Low stock with days left
+SELECT s.product_id, s.name_local, s.qty_on_hand, s.reorder_level,
+ROUND(s.qty_on_hand / NULLIF(-SUM(m.qty_change) / 30.0, 0), 1) AS days_left
+FROM v_stock_on_hand s
+LEFT JOIN stock_movements m ON m.product_id = s.product_id AND m.movement_type = 'sale'
+AND m.deleted_at IS NULL AND m.movement_time >= now() - interval '30 days'
+WHERE s.shop_id = :shop_id AND s.qty_on_hand <= s.reorder_level
+GROUP BY s.product_id, s.name_local, s.qty_on_hand, s.reorder_level
 ORDER BY days_left NULLS LAST;
+```
 
 **Open items (must be closed before the step that needs them)**
 
