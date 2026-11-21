@@ -1,0 +1,20 @@
+include: package:flutter_lints/flutter.yaml
+
+analyzer:
+  language:
+    strict-casts: true
+    strict-inference: true
+    strict-raw-types: true
+  exclude:
+    - "**/*.g.dart"
+    - "lib/l10n/**"
+    - build/**
+    - android/**
+    - web/**
+
+linter:
+  rules:
+    - prefer_single_quotes
+    - avoid_print
+    - always_declare_return_types
+    - unawaited_futures
