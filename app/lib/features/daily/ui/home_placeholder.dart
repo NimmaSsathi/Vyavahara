@@ -21,8 +21,10 @@ class HomePlaceholder extends ConsumerWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Text(t.appName,
-                  style: Theme.of(context).textTheme.headlineMedium),
+              Text(
+                t.appName,
+                style: Theme.of(context).textTheme.headlineMedium,
+              ),
               const SizedBox(height: 8),
               Text(t.tagline),
               const SizedBox(height: 24),

@@ -16,8 +16,7 @@ Future<void> main(List<String> args) async {
       stderr.writeln('Missing file: ${file.path}');
       exit(1);
     }
-    final map =
-        jsonDecode(await file.readAsString()) as Map<String, dynamic>;
+    final map = jsonDecode(await file.readAsString()) as Map<String, dynamic>;
     final messages = <String, dynamic>{
       for (final e in map.entries)
         if (!e.key.startsWith('@')) e.key: e.value,

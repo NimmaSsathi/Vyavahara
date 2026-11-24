@@ -10,10 +10,7 @@ part 'router.g.dart';
 GoRouter router(Ref ref) {
   return GoRouter(
     routes: <RouteBase>[
-      GoRoute(
-        path: '/',
-        builder: (context, state) => const HomePlaceholder(),
-      ),
+      GoRoute(path: '/', builder: (context, state) => const HomePlaceholder()),
     ],
   );
 }

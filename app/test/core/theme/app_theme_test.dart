@@ -13,22 +13,30 @@ double _contrast(Color a, Color b) {
 void main() {
   // NFR-13: text contrast at least 4.5:1.
   test('NFR-13 ink on background', () {
-    expect(_contrast(AppColors.ink, AppColors.background),
-        greaterThanOrEqualTo(4.5));
+    expect(
+      _contrast(AppColors.ink, AppColors.background),
+      greaterThanOrEqualTo(4.5),
+    );
   });
 
   test('NFR-13 owes (red) on background', () {
-    expect(_contrast(AppColors.owes, AppColors.background),
-        greaterThanOrEqualTo(4.5));
+    expect(
+      _contrast(AppColors.owes, AppColors.background),
+      greaterThanOrEqualTo(4.5),
+    );
   });
 
   test('NFR-13 paid (green) on background', () {
-    expect(_contrast(AppColors.paid, AppColors.background),
-        greaterThanOrEqualTo(4.5));
+    expect(
+      _contrast(AppColors.paid, AppColors.background),
+      greaterThanOrEqualTo(4.5),
+    );
   });
 
   test('NFR-13 ink text on accent fill', () {
-    expect(_contrast(AppColors.ink, AppColors.accent),
-        greaterThanOrEqualTo(4.5));
+    expect(
+      _contrast(AppColors.ink, AppColors.accent),
+      greaterThanOrEqualTo(4.5),
+    );
   });
 }

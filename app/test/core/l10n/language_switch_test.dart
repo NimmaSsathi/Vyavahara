@@ -4,8 +4,7 @@ import 'package:material_ui/material_ui.dart';
 import 'package:vyavahara/main.dart';
 
 void main() {
-  testWidgets('FR-AU-01 language buttons switch the Home text',
-      (tester) async {
+  testWidgets('FR-AU-01 language buttons switch the Home text', (tester) async {
     await tester.pumpWidget(const ProviderScope(child: VyavaharaApp()));
     await tester.pumpAndSettle();
 
