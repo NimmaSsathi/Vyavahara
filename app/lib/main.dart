@@ -3,8 +3,8 @@ import 'package:material_ui/material_ui.dart';
 
 import 'core/l10n/locale_controller.dart';
 import 'core/theme/app_theme.dart';
-import 'features/daily/ui/home_placeholder.dart';
 import 'l10n/app_localizations.dart';
+import 'router.dart';
 
 void main() {
   runApp(const ProviderScope(child: VyavaharaApp()));
@@ -16,7 +16,7 @@ class VyavaharaApp extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final locale = ref.watch(localeControllerProvider);
-    return MaterialApp(
+    return MaterialApp.router(
       debugShowCheckedModeBanner: false,
       theme: AppTheme.light,
       locale: locale,
@@ -25,7 +25,7 @@ class VyavaharaApp extends ConsumerWidget {
         AppLocalizations.delegate,
         ...GlobalMaterialLocalizations.delegates,
       ],
-      home: const HomePlaceholder(),
+      routerConfig: ref.watch(routerProvider),
     );
   }
 }
