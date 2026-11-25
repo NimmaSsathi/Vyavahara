@@ -1,0 +1,120 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  FLUTTER_VERSION: '3.50.1'
+  JAVA_VERSION: '21'
+  # NFR-03: release APK (split per ABI) must be 30 MiB or less.
+  APK_MAX_BYTES: '31457280'
+
+jobs:
+  checks:
+    name: Format, analyze, ARB parity, tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+      - run: flutter --version
+      - run: flutter pub get
+      - run: flutter gen-l10n
+      - name: Format (authored code only)
+        run: dart format --output=none --set-exit-if-changed lib/main.dart lib/router.dart lib/core lib/features lib/voice test tool
+      - name: Analyze (NFR-16)
+        run: flutter analyze
+      - name: ARB key parity (NFR-12)
+        run: dart run tool/check_arb_parity.dart
+      - name: Tests
+        run: flutter test
+
+  android:
+    name: Release APK and size gate
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+      - run: flutter config --jdk-dir "$JAVA_HOME"
+      - run: flutter pub get
+      - name: Build release APKs (split per ABI)
+        run: flutter build apk --release --split-per-abi
+      - name: APK size gate (NFR-03)
+        run: |
+          fail=0
+          for f in build/app/outputs/flutter-apk/*-release.apk; do
+            size=$(stat -c %s "$f")
+            echo "$f: $size bytes"
+            if [ "$size" -gt "$APK_MAX_BYTES" ]; then
+              echo "::error::$f is larger than 30 MiB"
+              fail=1
+            fi
+          done
+          exit $fail
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-apks
+          path: app/build/app/outputs/flutter-apk/*-release.apk
+          retention-days: 7
+
+  web:
+    name: Web build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+      - run: flutter pub get
+      - run: flutter build web --release
+
+  secrets:
+    name: Secret scan (SEC-05)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Block committed env files
+        run: |
+          if git ls-files | grep -E '(^|/)\.env($|\.)' | grep -v -E '\.env\.example$'; then
+            echo "::error::An .env file is tracked by git"
+            exit 1
+          fi
+      - name: Scan for key patterns
+        run: |
+          if git grep -I -n -E 'eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}|sb_secret_[A-Za-z0-9_]+|-----BEGIN [A-Z ]*PRIVATE KEY-----|AKIA[0-9A-Z]{16}' -- . ':!.github' ':!docs'; then
+            echo "::error::Possible secret found in tracked files"
+            exit 1
+          fi
